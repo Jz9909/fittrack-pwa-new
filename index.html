@@ -23,71 +23,67 @@
         const db = getFirestore(app);
         const GEMINI_API_KEY = "AIzaSyAqIAwLbRy8J_TWeMESBF3z_MoWij_LYwA";
 
-        const GOALS = { targetCal: 1593, targetPro: 97, targetCarb: 160, targetFiber: 25 };
+        const GOALS = { targetCal: 1593 };
 
-        // --- 修复点：移除 orderBy，确保空数据库也能读取 ---
+        // 1. 首页实时监听
         function initDashboard() {
             const startOfToday = new Date();
             startOfToday.setHours(0,0,0,0);
-
-            const q = query(
-                collection(db, "daily_logs"), 
-                where("timestamp", ">=", Timestamp.fromDate(startOfToday))
-            );
+            const q = query(collection(db, "daily_logs"), where("timestamp", ">=", Timestamp.fromDate(startOfToday)));
 
             onSnapshot(q, (snapshot) => {
                 let totalCal = 0;
                 let listHtml = "";
-                
                 snapshot.forEach((doc) => {
                     const data = doc.data();
                     totalCal += Number(data.cal || 0);
-                    listHtml += `
-                        <div class="flex justify-between items-center p-4 bg-slate-50 rounded-2xl mb-2">
-                            <span class="font-bold text-sm">${data.name}</span>
-                            <span class="font-black text-sm">${data.cal} kcal</span>
-                        </div>`;
+                    listHtml += `<div class="flex justify-between p-4 bg-slate-50 rounded-2xl mb-2 font-bold text-sm"><span>${data.name}</span><span>${data.cal} kcal</span></div>`;
                 });
-
                 document.getElementById('main-cal').innerText = Math.max(0, GOALS.targetCal - totalCal);
-                document.getElementById('food-list').innerHTML = listHtml || "<p class='text-slate-300 text-xs text-center py-10'>尚未记录今日饮食</p>";
+                document.getElementById('food-list').innerHTML = listHtml || "<p class='text-slate-300 text-center py-10'>暂无记录</p>";
             });
         }
 
-        // --- 这就是你要找的 saveIntake 逻辑 ---
-        window.saveIntake = async (name, weight, isImage = false, base64 = null) => {
-            document.body.style.opacity = "0.5";
-            
-            // 构造 AI 提示词：要求它根据克数计算
-            let prompt = isImage 
-                ? "分析图中食物，给出热量(kcal)。只返回JSON:{\"name\":\"名\",\"cal\":100,\"pro\":10,\"car\":10,\"fib\":2}"
-                : `计算食物：${name}，重量：${weight}克。给出热量(kcal)。只返回JSON:{"name":"${name}","cal":123,"pro":10,"car":20,"fib":5}`;
+        // 2. 保存逻辑 (带自动降级功能)
+        window.saveIntake = async (name, weight) => {
+            const btn = document.getElementById('save-btn');
+            btn.innerText = "正在计算...";
+            btn.disabled = true;
+
+            let result = { name: name, cal: Math.round(weight * 1.5), timestamp: Timestamp.now() }; // 默认保底逻辑
 
             try {
+                // 尝试调用 Gemini AI
+                const prompt = `计算食物：${name}，重量：${weight}克。只返回JSON:{"name":"${name}","cal":123}`;
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }, isImage ? { inline_data: { mime_type: "image/jpeg", data: base64 } } : null].filter(Boolean) }]
-                    })
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
                 });
                 
-                const data = await res.json();
-                const resultText = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
-                const result = JSON.parse(resultText);
-                
+                if (res.ok) {
+                    const data = await res.json();
+                    const aiText = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
+                    const aiResult = JSON.parse(aiText);
+                    result.cal = aiResult.cal;
+                    console.log("AI 计算成功");
+                }
+            } catch (err) {
+                console.warn("AI 联网失败，已切换至本地估算模式");
+            }
+
+            try {
                 // 存入 Firebase
-                await addDoc(collection(db, "daily_logs"), { 
-                    ...result, 
-                    timestamp: Timestamp.now() 
+                await addDoc(collection(db, "daily_logs"), {
+                    ...result,
+                    timestamp: Timestamp.now()
                 });
-                
                 window.showTab('home');
             } catch (e) {
+                alert("数据库写入失败！请确认 Firebase Rules 是否点击了蓝色的 PUBLISH 按钮。");
                 console.error(e);
-                alert("AI识别或数据库保存失败。请检查：1.Firebase Rules是否Publish 2.网络环境");
             } finally {
-                document.body.style.opacity = "1";
+                btn.innerText = "计算并保存";
+                btn.disabled = false;
             }
         };
 
@@ -97,42 +93,41 @@
         };
 
         window.handleManual = () => {
-            const name = document.getElementById('m-name').value;
-            const weight = document.getElementById('m-weight').value;
-            if(!name || !weight) return alert("请填写食物和克数");
-            window.saveIntake(name, weight);
+            const n = document.getElementById('m-name').value;
+            const w = document.getElementById('m-weight').value;
+            if(!n || !w) return alert("请完整填写信息");
+            window.saveIntake(n, w);
         };
 
         window.onload = () => { initDashboard(); };
     </script>
 </head>
-<body class="bg-[#F2F2F7] text-black">
-    <main class="max-w-md mx-auto p-6 pt-16 pb-32">
+<body class="bg-[#F2F2F7] text-black p-6">
+    <main class="max-w-md mx-auto">
         <section id="tab-home" class="tab-content space-y-6">
-            <div class="bg-white p-8 rounded-[3rem] shadow-sm">
-                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">今日剩余热量</p>
-                <div class="flex items-baseline gap-1 mt-1">
-                    <span id="main-cal" class="text-7xl font-black tracking-tighter">1593</span>
-                    <span class="text-slate-300 font-bold text-xs uppercase">kcal</span>
-                </div>
+            <h1 class="text-2xl font-black italic">STATUS</h1>
+            <div class="bg-white p-8 rounded-[3rem] shadow-sm text-center">
+                <p class="text-[10px] font-black text-slate-400 uppercase mb-2">Remaining</p>
+                <span id="main-cal" class="text-7xl font-black tracking-tighter">1593</span>
             </div>
-            <div class="bg-white p-6 rounded-[2.5rem] shadow-sm">
-                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">今日摄入明细</p>
-                <div id="food-list" class="space-y-1"></div>
+            <div class="bg-white p-6 rounded-[2.5rem]">
+                <p class="text-[10px] font-black text-slate-400 uppercase mb-4">Today's Log</p>
+                <div id="food-list"></div>
             </div>
         </section>
 
         <section id="tab-add" class="tab-content hidden space-y-4">
-            <div class="bg-white p-8 rounded-[2.5rem] space-y-5">
-                <input id="m-name" type="text" placeholder="食物名称 (如: 苹果)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold">
-                <input id="m-weight" type="number" placeholder="重量 (克)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold">
-                <button onclick="handleManual()" class="w-full bg-black text-white p-5 rounded-2xl font-black uppercase tracking-widest">计算并保存</button>
+            <h2 class="text-2xl font-black italic">ADD FOOD</h2>
+            <div class="bg-white p-8 rounded-[2.5rem] space-y-4">
+                <input id="m-name" type="text" placeholder="食物 (如: 鸡蛋)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
+                <input id="m-weight" type="number" placeholder="重量 (克)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
+                <button id="save-btn" onclick="handleManual()" class="w-full bg-black text-white p-5 rounded-2xl font-black uppercase text-xs">计算并保存</button>
             </div>
         </section>
 
-        <nav class="fixed bottom-10 left-8 right-8 h-18 bg-white rounded-full shadow-2xl flex items-center justify-around">
-            <button onclick="showTab('home')" class="p-4 text-black">🏠</button>
-            <button onclick="showTab('add')" class="p-4 text-slate-300">➕</button>
+        <nav class="fixed bottom-10 left-8 right-8 h-18 bg-white/90 backdrop-blur rounded-full shadow-2xl flex justify-around items-center">
+            <button onclick="showTab('home')" class="p-4 text-xl">🏠</button>
+            <button onclick="showTab('add')" class="p-4 text-xl text-slate-300">➕</button>
         </nav>
     </main>
 </body>
