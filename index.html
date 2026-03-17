@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>SvelteFit AI</title>
+    <title>SvelteFit Pro AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
-        import { getFirestore, collection, addDoc, query, onSnapshot, where, Timestamp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, query, onSnapshot, where, Timestamp, orderBy } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyD5JAln13HRfqCo-SvWxrS0wCv6b1bKYG8",
@@ -23,68 +23,84 @@
         const db = getFirestore(app);
         const GEMINI_API_KEY = "AIzaSyAqIAwLbRy8J_TWeMESBF3z_MoWij_LYwA";
 
-        const GOALS = { targetCal: 1593 };
+        // 核心目标设定 (基于 60.8kg 女性, 运动频率 4-5次/周)
+        // 运动人群蛋白质建议: 1.6g/kg -> 约 97g
+        const GOALS = { 
+            baseCal: 1593, 
+            targetPro: 97, 
+            targetCarb: 160, 
+            targetFib: 25,
+            lastPeriod: "2026-03-15"
+        };
 
-        // 1. 首页实时监听
-        function initDashboard() {
-            const startOfToday = new Date();
-            startOfToday.setHours(0,0,0,0);
-            const q = query(collection(db, "daily_logs"), where("timestamp", ">=", Timestamp.fromDate(startOfToday)));
+        // --- 1. 实时仪表盘监听 ---
+        function initApp() {
+            const startOfDay = new Date();
+            startOfDay.setHours(0,0,0,0);
+            const q = query(collection(db, "daily_logs"), where("timestamp", ">=", Timestamp.fromDate(startOfDay)));
 
             onSnapshot(q, (snapshot) => {
-                let totalCal = 0;
+                let consumed = { cal: 0, pro: 0, carb: 0, fib: 0 };
                 let listHtml = "";
+
                 snapshot.forEach((doc) => {
-                    const data = doc.data();
-                    totalCal += Number(data.cal || 0);
-                    listHtml += `<div class="flex justify-between p-4 bg-slate-50 rounded-2xl mb-2 font-bold text-sm"><span>${data.name}</span><span>${data.cal} kcal</span></div>`;
+                    const d = doc.data();
+                    consumed.cal += Number(d.cal || 0);
+                    consumed.pro += Number(d.pro || 0);
+                    consumed.carb += Number(d.carb || 0);
+                    consumed.fib += Number(d.fib || 0);
+                    listHtml += `<div class="flex justify-between p-3 bg-slate-50 rounded-xl mb-2 text-xs font-bold">
+                        <span>${d.name}</span><span>${d.cal}kcal / P:${d.pro}g</span>
+                    </div>`;
                 });
-                document.getElementById('main-cal').innerText = Math.max(0, GOALS.targetCal - totalCal);
-                document.getElementById('food-list').innerHTML = listHtml || "<p class='text-slate-300 text-center py-10'>暂无记录</p>";
+
+                // 更新 UI
+                document.getElementById('remain-cal').innerText = Math.max(0, GOALS.baseCal - consumed.cal);
+                document.getElementById('food-history').innerHTML = listHtml || "<p class='text-center py-4 text-slate-300'>今日无数据</p>";
+                
+                // 更新营养缺口 (界面5功能)
+                document.getElementById('gap-pro').innerText = Math.max(0, GOALS.targetPro - consumed.pro).toFixed(1);
+                document.getElementById('gap-carb').innerText = Math.max(0, GOALS.targetCarb - consumed.carb).toFixed(1);
+                document.getElementById('gap-fib').innerText = Math.max(0, GOALS.targetFib - consumed.fib).toFixed(1);
             });
         }
 
-        // 2. 保存逻辑 (带自动降级功能)
-        window.saveIntake = async (name, weight) => {
-            const btn = document.getElementById('save-btn');
-            btn.innerText = "正在计算...";
-            btn.disabled = true;
-
-            let result = { name: name, cal: Math.round(weight * 1.5), timestamp: Timestamp.now() }; // 默认保底逻辑
+        // --- 2. AI 核心处理 (界面1 & 界面2) ---
+        window.processIntake = async (name, weight, isImage = false, base64 = null) => {
+            document.getElementById('loading').classList.remove('hidden');
+            let prompt = isImage 
+                ? "分析图中食物，估算重量并给出热量(kcal),蛋白质(g),碳水(g),纤维(g)。" 
+                : `计算${weight}克${name}的营养：热量(kcal),蛋白质(g),碳水(g),纤维(g)。`;
+            
+            prompt += "仅返回JSON格式:{\"name\":\"食物名\",\"cal\":100,\"pro\":10,\"car\":10,\"fib\":2}";
 
             try {
-                // 尝试调用 Gemini AI
-                const prompt = `计算食物：${name}，重量：${weight}克。只返回JSON:{"name":"${name}","cal":123}`;
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
                     method: 'POST',
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, isImage ? { inline_data: { mime_type: "image/jpeg", data: base64 } } : null].filter(Boolean) }] })
                 });
+                const data = await res.json();
+                const result = JSON.parse(data.candidates[0].content.parts[0].text.replace(/```json|```/g, ""));
                 
-                if (res.ok) {
-                    const data = await res.json();
-                    const aiText = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
-                    const aiResult = JSON.parse(aiText);
-                    result.cal = aiResult.cal;
-                    console.log("AI 计算成功");
-                }
-            } catch (err) {
-                console.warn("AI 联网失败，已切换至本地估算模式");
-            }
-
-            try {
-                // 存入 Firebase
-                await addDoc(collection(db, "daily_logs"), {
-                    ...result,
-                    timestamp: Timestamp.now()
-                });
+                await addDoc(collection(db, "daily_logs"), { ...result, timestamp: Timestamp.now() });
                 window.showTab('home');
             } catch (e) {
-                alert("数据库写入失败！请确认 Firebase Rules 是否点击了蓝色的 PUBLISH 按钮。");
-                console.error(e);
+                alert("AI 分析失败，请重试");
             } finally {
-                btn.innerText = "计算并保存";
-                btn.disabled = false;
+                document.getElementById('loading').classList.add('hidden');
             }
+        };
+
+        // --- 3. BMI & 基础消耗计算 (界面3) ---
+        window.calcBody = () => {
+            const w = parseFloat(document.getElementById('weight').value) || 60.8;
+            const h = 1.65; // 假设身高 165cm
+            const bmi = (w / (h * h)).toFixed(1);
+            document.getElementById('bmi-val').innerText = bmi;
+            
+            // Mifflin-St Jeor 估算基础代谢 (女)
+            const bmr = Math.round(10 * w + 6.25 * 165 - 5 * 25 - 161);
+            document.getElementById('bmr-val').innerText = bmr;
         };
 
         window.showTab = (id) => {
@@ -92,43 +108,108 @@
             document.getElementById('tab-' + id).classList.remove('hidden');
         };
 
-        window.handleManual = () => {
-            const n = document.getElementById('m-name').value;
-            const w = document.getElementById('m-weight').value;
-            if(!n || !w) return alert("请完整填写信息");
-            window.saveIntake(n, w);
-        };
-
-        window.onload = () => { initDashboard(); };
+        window.onload = () => { initApp(); calcBody(); };
     </script>
+    <style>
+        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); }
+        .tab-content { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+    </style>
 </head>
-<body class="bg-[#F2F2F7] text-black p-6">
-    <main class="max-w-md mx-auto">
+<body class="bg-[#F2F2F7] text-slate-900 pb-32">
+
+    <div id="loading" class="hidden fixed inset-0 z-50 glass flex items-center justify-center font-black italic">AI PROCESSING...</div>
+
+    <main class="max-w-md mx-auto p-6">
         <section id="tab-home" class="tab-content space-y-6">
-            <h1 class="text-2xl font-black italic">STATUS</h1>
-            <div class="bg-white p-8 rounded-[3rem] shadow-sm text-center">
-                <p class="text-[10px] font-black text-slate-400 uppercase mb-2">Remaining</p>
-                <span id="main-cal" class="text-7xl font-black tracking-tighter">1593</span>
+            <header class="flex justify-between items-center">
+                <h1 class="text-3xl font-black italic tracking-tighter italic uppercase">SvelteFit.</h1>
+                <div class="bg-pink-100 text-pink-600 px-3 py-1 rounded-full text-[10px] font-bold">排卵期-多摄入纤维</div>
+            </header>
+
+            <div class="bg-white p-8 rounded-[3rem] shadow-sm">
+                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">距离目标还剩</p>
+                <div class="flex items-baseline gap-1 mt-1">
+                    <span id="remain-cal" class="text-7xl font-black tracking-tighter">1593</span>
+                    <span class="text-slate-300 font-bold text-xs uppercase">kcal</span>
+                </div>
+                
+                <div class="mt-8 grid grid-cols-3 gap-2 border-t pt-6 border-slate-50">
+                    <div class="text-center"><p class="text-[8px] text-slate-400 font-bold uppercase mb-1 text-blue-500">还需蛋白</p><p id="gap-pro" class="font-black text-sm">0.0g</p></div>
+                    <div class="text-center"><p class="text-[8px] text-slate-400 font-bold uppercase mb-1 text-emerald-500">还需碳水</p><p id="gap-carb" class="font-black text-sm">0.0g</p></div>
+                    <div class="text-center"><p class="text-[8px] text-slate-400 font-bold uppercase mb-1 text-orange-500">还需纤维</p><p id="gap-fib" class="font-black text-sm">0.0g</p></div>
+                </div>
             </div>
-            <div class="bg-white p-6 rounded-[2.5rem]">
-                <p class="text-[10px] font-black text-slate-400 uppercase mb-4">Today's Log</p>
-                <div id="food-list"></div>
+
+            <div class="bg-white p-6 rounded-[2.5rem] shadow-sm">
+                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">今日摄入明细 (界面1)</p>
+                <div id="food-history"></div>
             </div>
         </section>
 
         <section id="tab-add" class="tab-content hidden space-y-4">
-            <h2 class="text-2xl font-black italic">ADD FOOD</h2>
-            <div class="bg-white p-8 rounded-[2.5rem] space-y-4">
-                <input id="m-name" type="text" placeholder="食物 (如: 鸡蛋)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                <input id="m-weight" type="number" placeholder="重量 (克)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                <button id="save-btn" onclick="handleManual()" class="w-full bg-black text-white p-5 rounded-2xl font-black uppercase text-xs">计算并保存</button>
+            <h2 class="text-2xl font-black italic uppercase">记录饮食</h2>
+            <button onclick="document.getElementById('cameraInput').click()" class="w-full bg-white p-12 rounded-[2.5rem] border-2 border-dashed border-slate-200 flex flex-col items-center">
+                <span class="text-4xl mb-2">📸</span>
+                <p class="font-bold text-slate-400 text-[10px] uppercase">拍照估算 (界面2)</p>
+            </button>
+            <div class="bg-white p-8 rounded-[3rem] space-y-4">
+                <p class="text-[10px] font-black text-center text-slate-400 uppercase">手动录入 (界面1)</p>
+                <input id="m-name" type="text" placeholder="食物: 牛排" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold">
+                <input id="m-weight" type="number" placeholder="重量: 200g" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold">
+                <button onclick="window.processIntake(document.getElementById('m-name').value, document.getElementById('m-weight').value)" class="w-full bg-black text-white p-5 rounded-2xl font-black uppercase text-xs">AI 计算并保存</button>
             </div>
         </section>
 
-        <nav class="fixed bottom-10 left-8 right-8 h-18 bg-white/90 backdrop-blur rounded-full shadow-2xl flex justify-around items-center">
-            <button onclick="showTab('home')" class="p-4 text-xl">🏠</button>
-            <button onclick="showTab('add')" class="p-4 text-xl text-slate-300">➕</button>
-        </nav>
+        <section id="tab-stats" class="tab-content hidden space-y-4">
+            <h2 class="text-2xl font-black italic uppercase">身体监测</h2>
+            <div class="bg-white p-8 rounded-[3rem] space-y-6">
+                <div class="flex justify-between items-center">
+                    <span class="font-bold">当前体重 (kg)</span>
+                    <input id="weight" type="number" value="60.8" oninput="calcBody()" class="w-16 text-right font-black outline-none bg-slate-50 p-1 rounded">
+                </div>
+                <div class="grid grid-cols-2 gap-4 border-t pt-4 text-center">
+                    <div><p class="text-[10px] text-slate-400 font-bold uppercase">BMI</p><p id="bmi-val" class="text-xl font-black">22.3</p></div>
+                    <div><p class="text-[10px] text-slate-400 font-bold uppercase">基础代谢</p><p id="bmr-val" class="text-xl font-black">1350</p></div>
+                </div>
+                <div class="space-y-3 border-t pt-4">
+                    <p class="text-[10px] font-black text-slate-400 uppercase">围度测量 (cm)</p>
+                    <div class="flex justify-between text-sm"><span>腰围 / 臀围</span><div class="flex gap-2"><input class="w-12 bg-slate-50 text-center" placeholder="68"><input class="w-12 bg-slate-50 text-center" placeholder="92"></div></div>
+                    <div class="flex justify-between text-sm"><span>肩膀 / 腿围</span><div class="flex gap-2"><input class="w-12 bg-slate-50 text-center" placeholder="100"><input class="w-12 bg-slate-50 text-center" placeholder="52"></div></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="tab-health" class="tab-content hidden space-y-4 text-center">
+            <div class="bg-black text-white p-10 rounded-[3rem] space-y-6">
+                <div class="w-16 h-16 bg-red-500 rounded-2xl mx-auto flex items-center justify-center text-3xl">❤️</div>
+                <h2 class="text-xl font-black uppercase italic">Apple Health Sync</h2>
+                <div class="space-y-1">
+                    <p class="text-4xl font-black tracking-tighter">2480</p>
+                    <p class="text-[10px] font-bold opacity-50 uppercase tracking-widest">今日总消耗 (Total Burned)</p>
+                </div>
+                <div class="pt-4 border-t border-white/10">
+                    <p class="text-emerald-400 font-black text-2xl">- 887 kcal</p>
+                    <p class="text-[10px] font-bold opacity-50 uppercase">当前热量赤字</p>
+                </div>
+            </div>
+        </section>
     </main>
+
+    <nav class="fixed bottom-10 left-8 right-8 h-18 bg-white/90 backdrop-blur-xl rounded-full shadow-2xl flex items-center justify-around px-2 border border-white/50">
+        <button onclick="showTab('home')" class="p-4">🏠</button>
+        <button onclick="showTab('add')" class="p-4">➕</button>
+        <button onclick="showTab('stats')" class="p-4">📏</button>
+        <button onclick="showTab('health')" class="p-4">❤️</button>
+    </nav>
+
+    <input type="file" id="cameraInput" accept="image/*" capture="camera" class="hidden" onchange="handleImage(this.files[0])">
+    <script>
+        function handleImage(file) {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => window.processIntake(null, null, true, reader.result.split(',')[1]);
+        }
+    </script>
 </body>
 </html>
