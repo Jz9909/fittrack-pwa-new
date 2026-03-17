@@ -117,18 +117,41 @@
             </div>
         </section>
 
-        <section id="tab-add" class="tab-content hidden space-y-4">
-            <h2 class="text-2xl font-black uppercase italic px-2">Log Intake</h2>
-            <button onclick="document.getElementById('cameraInput').click()" class="w-full bg-white p-10 rounded-[2.5rem] border-2 border-dashed border-slate-200 flex flex-col items-center">
-                <span class="text-4xl mb-2">📸</span>
-                <p class="font-bold text-slate-500 uppercase text-xs tracking-widest">AI Photo Recognize</p>
-            </button>
-            <div class="bg-white p-6 rounded-[2.5rem] space-y-4">
-                <input type="text" placeholder="食物名称" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                <input type="number" placeholder="重量 (g)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                <button class="w-full bg-black text-white p-4 rounded-2xl font-black uppercase text-xs tracking-widest">Save Manual</button>
-            </div>
-        </section>
+<section id="tab-add" class="tab-content hidden space-y-4">
+    <h2 class="text-2xl font-black uppercase italic px-2">Log Intake</h2>
+    <button onclick="document.getElementById('cameraInput').click()" class="w-full bg-white p-10 rounded-[2.5rem] border-2 border-dashed border-slate-200 flex flex-col items-center">
+        <span class="text-4xl mb-2">📸</span>
+        <p class="font-bold text-slate-500 uppercase text-xs tracking-widest">AI Photo Recognize</p>
+    </button>
+    
+    <div class="bg-white p-6 rounded-[2.5rem] space-y-4">
+        <input type="text" id="manual-name" placeholder="食物名称" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
+        <input type="number" id="manual-cal" placeholder="卡路里 (kcal)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
+        <button onclick="saveManual()" class="w-full bg-black text-white p-4 rounded-2xl font-black uppercase text-xs tracking-widest">Save Manual</button>
+    </div>
+</section>
+
+<script type="module">
+    // ... 在你的 script 标签里添加这个函数 ...
+    window.saveManual = async () => {
+        const name = document.getElementById('manual-name').value;
+        const cal = document.getElementById('manual-cal').value;
+        if(!name || !cal) return alert("请填写内容");
+
+        try {
+            await addDoc(collection(db, "daily_logs"), {
+                name: name,
+                cal: Number(cal),
+                pro: 0, car: 0, fib: 0, // 手动录入暂时设为0
+                timestamp: Timestamp.now()
+            });
+            alert("手动保存成功！");
+            showTab('home'); // 返回首页看数据
+        } catch (e) {
+            alert("保存失败: " + e.message);
+        }
+    };
+</script>
 
         <section id="tab-stats" class="tab-content hidden space-y-6">
             <div class="bg-white p-8 rounded-[3rem] space-y-6">
