@@ -6,32 +6,119 @@
     <title>SvelteFit Pro AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
-        import { getFirestore, collection, addDoc, query, onSnapshot, where, Timestamp, orderBy } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
+    import { getFirestore, collection, addDoc, query, onSnapshot, where, Timestamp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyD5JAln13HRfqCo-SvWxrS0wCv6b1bKYG8",
-            authDomain: "fitnessjz.firebaseapp.com",
-            projectId: "fitnessjz",
-            storageBucket: "fitnessjz.firebasestorage.app",
-            messagingSenderId: "740422822580",
-            appId: "1:740422822580:web:5efe6acaa89b697a71c5e1",
-            measurementId: "G-7L6XCFEM4T"
+    const firebaseConfig = {
+        apiKey: "AIzaSyD5JAln13HRfqCo-SvWxrS0wCv6b1bKYG8",
+        authDomain: "fitnessjz.firebaseapp.com",
+        projectId: "fitnessjz",
+        storageBucket: "fitnessjz.firebasestorage.app",
+        messagingSenderId: "740422822580",
+        appId: "1:740422822580:web:5efe6acaa89b697a71c5e1",
+        measurementId: "G-7L6XCFEM4T"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const GEMINI_API_KEY = "AIzaSyAqIAwLbRy8J_TWeMESBF3z_MoWij_LYwA";
+
+    // 默认目标
+    const GOALS = { baseCal: 1593, targetPro: 97, targetCarb: 160, targetFib: 25 };
+
+    // --- 增强版：处理录入逻辑 ---
+    window.processIntake = async (name, weight, isImage = false, base64 = null) => {
+        const loading = document.getElementById('loading');
+        loading.classList.remove('hidden');
+        
+        // 1. 准备保底数据（万一AI坏了，也能存入数据）
+        let result = {
+            name: name || (isImage ? "图片识别食物" : "未知食物"),
+            cal: Math.round((weight || 100) * 1.5), // 默认 1.5kcal/g
+            pro: Math.round((weight || 100) * 0.1), // 默认 10% 蛋白
+            car: Math.round((weight || 100) * 0.2),
+            fib: Math.round((weight || 100) * 0.02)
         };
 
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const GEMINI_API_KEY = "AIzaSyAqIAwLbRy8J_TWeMESBF3z_MoWij_LYwA";
+        try {
+            // 2. 构造 AI 指令
+            const prompt = isImage 
+                ? "这张图里是什么食物？估算总热量(kcal),蛋白质(g),碳水(g),纤维(g)。只返回纯JSON格式，禁止包含任何文字说明。" 
+                : `计算${weight}克${name}的营养成分。只返回纯JSON:{"name":"${name}","cal":100,"pro":10,"car":20,"fib":5}`;
 
-        // 核心目标设定 (基于 60.8kg 女性, 运动频率 4-5次/周)
-        // 运动人群蛋白质建议: 1.6g/kg -> 约 97g
-        const GOALS = { 
-            baseCal: 1593, 
-            targetPro: 97, 
-            targetCarb: 160, 
-            targetFib: 25,
-            lastPeriod: "2026-03-15"
-        };
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }, isImage ? { inline_data: { mime_type: "image/jpeg", data: base64 } } : null].filter(Boolean) }]
+                })
+            });
+
+            if (!response.ok) throw new Error('Network response was not ok');
+
+            const data = await response.json();
+            // 清理 AI 可能返回的 Markdown 标记
+            const rawText = data.candidates[0].content.parts[0].text;
+            const cleanJson = rawText.replace(/```json|```/gi, "").trim();
+            const aiData = JSON.parse(cleanJson);
+            
+            // 使用 AI 返回的真实数据覆盖保底数据
+            result = { ...result, ...aiData };
+            console.log("AI 识别成功:", result);
+
+        } catch (e) {
+            console.warn("AI 识别失败或超时，启动保底估算逻辑:", e);
+            // 这里不弹窗报错，直接走保底逻辑存入数据库
+        }
+
+        try {
+            // 3. 写入 Firebase
+            await addDoc(collection(db, "daily_logs"), {
+                ...result,
+                timestamp: Timestamp.now()
+            });
+            window.showTab('home');
+        } catch (dbError) {
+            alert("数据库写入失败，请检查 Firebase Rules 是否发布！");
+        } finally {
+            loading.classList.add('hidden');
+        }
+    };
+
+    // 初始化首页监听
+    function initApp() {
+        const startOfDay = new Date();
+        startOfDay.setHours(0,0,0,0);
+        const q = query(collection(db, "daily_logs"), where("timestamp", ">=", Timestamp.fromDate(startOfDay)));
+
+        onSnapshot(q, (snapshot) => {
+            let consumed = { cal: 0, pro: 0, carb: 0, fib: 0 };
+            let listHtml = "";
+            snapshot.forEach((doc) => {
+                const d = doc.data();
+                consumed.cal += Number(d.cal || 0);
+                consumed.pro += Number(d.pro || 0);
+                consumed.carb += Number(d.car || 0);
+                consumed.fib += Number(d.fib || 0);
+                listHtml += `<div class="flex justify-between p-3 bg-slate-50 rounded-xl mb-2 text-xs font-bold uppercase">
+                    <span>${d.name}</span><span>${d.cal} KCAL</span>
+                </div>`;
+            });
+            document.getElementById('remain-cal').innerText = Math.max(0, GOALS.baseCal - consumed.cal);
+            document.getElementById('food-history').innerHTML = listHtml || "<p class='text-center py-4 text-slate-300'>WAITING FOR LOG...</p>";
+            document.getElementById('gap-pro').innerText = Math.max(0, GOALS.targetPro - consumed.pro).toFixed(1);
+            document.getElementById('gap-carb').innerText = Math.max(0, GOALS.targetCarb - consumed.carb).toFixed(1);
+            document.getElementById('gap-fib').innerText = Math.max(0, GOALS.targetFib - consumed.fib).toFixed(1);
+        });
+    }
+
+    window.showTab = (id) => {
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
+        document.getElementById('tab-' + id).classList.remove('hidden');
+    };
+
+    window.onload = () => { initApp(); };
+</script>
 
         // --- 1. 实时仪表盘监听 ---
         function initApp() {
