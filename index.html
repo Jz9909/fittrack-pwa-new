@@ -6,75 +6,56 @@
     <title>SvelteFit AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
+        // 核心：使用 CDN 方式引入，确保浏览器能直接运行
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getFirestore, doc, setDoc, onSnapshot, collection, query, orderBy, limit, addDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, query, onSnapshot, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        // --- TODO: 填入你的 Firebase 配置 ---
-        const firebaseConfig = {<script type="module">
-  // Import the functions you need from the SDKs you need
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
-  import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-analytics.js";
-  // TODO: Add SDKs for Firebase products that you want to use
-  // https://firebase.google.com/docs/web/setup#available-libraries
-
-  // Your web app's Firebase configuration
-  // For Firebase JS SDK v7.20.0 and later, measurementId is optional
-  const firebaseConfig = {
-    apiKey: "AIzaSyD5JAln13HRfqCo-SvWxrS0wCv6b1bKYG8",
-    authDomain: "fitnessjz.firebaseapp.com",
-    projectId: "fitnessjz",
-    storageBucket: "fitnessjz.firebasestorage.app",
-    messagingSenderId: "740422822580",
-    appId: "1:740422822580:web:5efe6acaa89b697a71c5e1",
-    measurementId: "G-7L6XCFEM4T"
-  };
-
-  // Initialize Firebase
-  const app = initializeApp(firebaseConfig);
-  const analytics = getAnalytics(app);
-</script>
-            apiKey: "你的API_KEY",
-            authDomain: "你的项目.firebaseapp.com",
-            projectId: "你的项目ID",
-            storageBucket: "...",
-            messagingSenderId: "...",
-            appId: "..."
+        // 你的 Firebase 配置已填入
+        const firebaseConfig = {
+            apiKey: "AIzaSyD5JAln13HRfqCo-SvWxrS0wCv6b1bKYG8",
+            authDomain: "fitnessjz.firebaseapp.com",
+            projectId: "fitnessjz",
+            storageBucket: "fitnessjz.firebasestorage.app",
+            messagingSenderId: "740422822580",
+            appId: "1:740422822580:web:5efe6acaa89b697a71c5e1",
+            measurementId: "G-7L6XCFEM4T"
         };
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // --- TODO: 填入你的 Gemini API Key ---
+        // 你的 Gemini Key 已填入
         const GEMINI_API_KEY = "AIzaSyAqIAwLbRy8J_TWeMESBF3z_MoWij_LYwA";
 
-        // --- 核心逻辑变量 ---
+        // 用户常量
         const GOALS = {
-            bmr: 1285, tdee: 1991, targetCal: 1593,
-            targetPro: 97, targetCarb: 160, targetFiber: 25,
+            targetCal: 1593, targetPro: 97, targetCarb: 160, targetFiber: 25,
             lastPeriods: ["2026-01-18", "2026-02-15", "2026-03-15"]
         };
 
-        // --- 1. 月经周期计算 ---
-        function getCyclePhase() {
+        // 月经周期建议逻辑
+        window.getCyclePhase = () => {
             const lastStart = new Date(GOALS.lastPeriods[2]);
             const today = new Date();
-            const diffDays = Math.floor((today - lastStart) / (1000 * 60 * 60 * 24));
-            if (diffDays <= 5) return { name: "行经期", tip: "补铁，多休息，避免冷饮" };
-            if (diffDays <= 13) return { name: "滤泡期", tip: "代谢旺盛，适合高强度力量训练" };
-            if (diffDays <= 16) return { name: "排卵期", tip: "体温升高，注意补水和核心训练" };
+            const diff = Math.floor((today - lastStart) / (86400000));
+            if (diff <= 5) return { name: "行经期", tip: "补铁，多休息，避免冷饮" };
+            if (diff <= 13) return { name: "滤泡期", tip: "代谢旺盛，适合高强度力量训练" };
+            if (diff <= 16) return { name: "排卵期", tip: "体温升高，注意补水和核心训练" };
             return { name: "黄体期", tip: "易水肿，减少盐分，增加纤维摄入" };
-        }
+        };
 
-        // --- 2. 界面切换逻辑 ---
+        // 导航切换
         window.showTab = (tabId) => {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
             document.getElementById('tab-' + tabId).classList.remove('hidden');
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.replace('text-black', 'text-slate-300'));
-            event.currentTarget?.classList.replace('text-slate-300', 'text-black');
+            const btn = document.getElementById('btn-' + tabId);
+            if(btn) btn.classList.replace('text-slate-300', 'text-black');
         };
 
-        // --- 3. AI 识别逻辑 ---
+        // AI 识别功能
         window.analyzeImage = async (file) => {
+            if(!file) return;
             const reader = new FileReader();
             reader.readAsDataURL(file);
             reader.onload = async () => {
@@ -86,107 +67,100 @@
                         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: base64Data } }] }] })
                     });
                     const data = await response.json();
-                    const info = JSON.parse(data.candidates[0].content.parts[0].text.replace(/```json|```/g, ""));
+                    const text = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "");
+                    const info = JSON.parse(text);
                     await addDoc(collection(db, "daily_logs"), { ...info, timestamp: new Date() });
-                    alert(`AI识别：${info.name}，已存入云端`);
-                } catch (e) { alert("AI识别请求失败，请检查Key"); }
+                    alert(`AI已识别：${info.name} (${info.cal}kcal)，数据已同步。`);
+                } catch (e) { alert("识别出错，请确保Firebase规则已开启且API有效"); }
             };
         };
 
-        // 初始化
         window.onload = () => {
             const phase = getCyclePhase();
             document.getElementById('phase-name').innerText = phase.name;
             document.getElementById('cycle-tip').innerText = phase.tip;
         };
-
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
-        .glass { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(20px); }
-        .active-btn { transform: scale(0.95); opacity: 0.8; }
+        .tab-content { animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body class="bg-[#F2F2F7] text-black pb-32">
 
     <header class="p-8 pt-16 flex justify-between items-center">
         <h1 class="text-2xl font-black italic tracking-tighter">SVELTEFIT.</h1>
-        <div id="phase-tag" class="px-3 py-1 bg-white rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm">
+        <div class="px-3 py-1 bg-white rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm">
             <span id="phase-name">Loading</span>
         </div>
     </header>
 
     <main class="px-6 max-w-md mx-auto">
-        
         <section id="tab-home" class="tab-content space-y-6">
             <div class="bg-white p-8 rounded-[3rem] shadow-sm">
-                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Remaining Today</p>
+                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Remaining Energy</p>
                 <div class="flex items-baseline gap-1 mt-2">
                     <span id="main-cal" class="text-7xl font-black tracking-tighter">1593</span>
-                    <span class="text-slate-300 font-bold">KCAL</span>
+                    <span class="text-slate-300 font-bold uppercase text-xs">kcal</span>
                 </div>
                 <div class="mt-8 grid grid-cols-3 gap-4 border-t pt-6 border-slate-50">
-                    <div><p class="text-[10px] text-slate-400 font-bold uppercase">PRO</p><p class="font-black text-blue-600">0/97g</p></div>
-                    <div><p class="text-[10px] text-slate-400 font-bold uppercase">CARB</p><p class="font-black text-emerald-600">0/160g</p></div>
-                    <div><p class="text-[10px] text-slate-400 font-bold uppercase">FIB</p><p class="font-black text-orange-600">0/25g</p></div>
+                    <div><p class="text-[10px] text-slate-400 font-bold uppercase">Pro</p><p class="font-black text-blue-600">0/97g</p></div>
+                    <div><p class="text-[10px] text-slate-400 font-bold uppercase">Carb</p><p class="font-black text-emerald-600">0/160g</p></div>
+                    <div><p class="text-[10px] text-slate-400 font-bold uppercase">Fib</p><p class="font-black text-orange-600">0/25g</p></div>
                 </div>
             </div>
             <div class="bg-blue-600 p-6 rounded-[2.5rem] text-white">
-                <p class="text-[10px] font-bold opacity-60 uppercase mb-2">Coach Suggestion</p>
-                <p id="cycle-tip" class="text-sm font-medium leading-relaxed"></p>
+                <p class="text-[10px] font-bold opacity-60 uppercase mb-2">Cycle Advice</p>
+                <p id="cycle-tip" class="text-sm font-medium leading-relaxed italic"></p>
             </div>
         </section>
 
         <section id="tab-add" class="tab-content hidden space-y-4">
-            <h2 class="text-3xl font-black uppercase px-2 italic">Add Entry</h2>
+            <h2 class="text-2xl font-black uppercase italic px-2">Log Intake</h2>
             <button onclick="document.getElementById('cameraInput').click()" class="w-full bg-white p-10 rounded-[2.5rem] border-2 border-dashed border-slate-200 flex flex-col items-center">
                 <span class="text-4xl mb-2">📸</span>
-                <p class="font-bold text-slate-500">AI 拍照识别</p>
+                <p class="font-bold text-slate-500 uppercase text-xs tracking-widest">AI Photo Recognize</p>
             </button>
             <div class="bg-white p-6 rounded-[2.5rem] space-y-4">
-                <input id="manual-name" type="text" placeholder="食物名称" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold">
-                <div class="flex gap-2">
-                    <input id="manual-weight" type="number" placeholder="重量(g)" class="w-1/2 p-4 bg-slate-50 rounded-2xl outline-none font-bold">
-                    <button class="w-1/2 bg-black text-white rounded-2xl font-bold uppercase text-sm">手动保存</button>
-                </div>
+                <input type="text" placeholder="食物名称" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
+                <input type="number" placeholder="重量 (g)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
+                <button class="w-full bg-black text-white p-4 rounded-2xl font-black uppercase text-xs tracking-widest">Save Manual</button>
             </div>
         </section>
 
         <section id="tab-stats" class="tab-content hidden space-y-6">
             <div class="bg-white p-8 rounded-[3rem] space-y-6">
-                <h3 class="font-black uppercase italic border-b pb-4">Body Metrics</h3>
-                <div class="flex justify-between"><span>体重 Weight (kg)</span><input type="number" class="text-right font-black outline-none w-16" value="60.8"></div>
-                <div class="flex justify-between"><span>腰围 Waist (cm)</span><input type="number" class="text-right font-black outline-none w-16" placeholder="0"></div>
-                <div class="flex justify-between"><span>BMI</span><span class="font-black">21.4</span></div>
+                <h3 class="font-black uppercase italic border-b pb-4 text-xs tracking-widest">Body Stats</h3>
+                <div class="flex justify-between"><span>Weight (kg)</span><input type="number" class="text-right font-black outline-none w-16" value="60.8"></div>
+                <div class="flex justify-between"><span>Waist (cm)</span><input type="number" class="text-right font-black outline-none w-16" placeholder="0"></div>
+                <div class="flex justify-between border-t pt-4"><span>BMI</span><span class="font-black">21.4</span></div>
             </div>
             <div class="bg-black text-white p-8 rounded-[3rem]">
-                <p class="text-[10px] font-bold opacity-50 uppercase mb-2">Goal Plan (3 Months)</p>
-                <p class="text-sm font-medium leading-relaxed">目标减重 5kg，每天需制造 <span class="text-blue-400 font-black underline">427kcal</span> 赤字。当前目标 1593kcal 符合要求。</p>
+                <p class="text-[10px] font-bold opacity-50 uppercase mb-2">Goal: -5kg in 3 Months</p>
+                <p class="text-sm font-medium">每日需维持 <span class="text-blue-400 font-black">~400kcal</span> 缺口。建议摄入不超过 1593kcal。</p>
             </div>
         </section>
 
         <section id="tab-cycle" class="tab-content hidden">
-            <div class="bg-pink-100 p-8 rounded-[3rem] text-pink-900 space-y-4">
-                <h2 class="text-4xl font-black italic">CYCLE.</h2>
-                <p class="text-sm font-bold opacity-70 leading-relaxed italic">最近三次：<br>01-18 / 02-15 / 03-15</p>
-                <div class="pt-4 border-t border-pink-200">
-                    <p class="font-black uppercase text-xs mb-1">当前周期建议</p>
-                    <p class="text-sm font-medium">如果你感到疲劳，可以适当增加 100kcal 的优质碳水（如燕麦、红薯）。</p>
+            <div class="bg-pink-100 p-8 rounded-[3rem] text-pink-900">
+                <h2 class="text-3xl font-black italic mb-4 uppercase">Cycle Log</h2>
+                <div class="space-y-4 text-sm font-bold opacity-80 italic">
+                    <p>Recent: 03-15 / 02-15 / 01-18</p>
+                    <p class="border-t border-pink-200 pt-4">周期稳定：约 28 天。下一预测：04-12</p>
                 </div>
             </div>
         </section>
-
     </main>
 
-    <nav class="fixed bottom-10 left-8 right-8 h-16 bg-white rounded-full shadow-2xl flex items-center justify-around px-2 border border-slate-100">
-        <button onclick="showTab('home')" class="nav-btn text-black transition-all"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16m-7 6h7" stroke-width="2.5" stroke-linecap="round"/></svg></button>
-        <button onclick="showTab('add')" class="nav-btn text-slate-300 transition-all"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" stroke-width="2.5" stroke-linecap="round"/></svg></button>
-        <button onclick="showTab('stats')" class="nav-btn text-slate-300 transition-all"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2z" stroke-width="2.5"/></svg></button>
-        <button onclick="showTab('cycle')" class="nav-btn text-slate-300 transition-all"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" stroke-width="2.5"/></svg></button>
+    <nav class="fixed bottom-10 left-8 right-8 h-16 bg-white rounded-full shadow-2xl flex items-center justify-around px-2 border border-slate-50">
+        <button id="btn-home" onclick="showTab('home')" class="nav-btn text-black"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16m-7 6h7" stroke-width="2.5" stroke-linecap="round"/></svg></button>
+        <button id="btn-add" onclick="showTab('add')" class="nav-btn text-slate-300"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" stroke-width="2.5" stroke-linecap="round"/></svg></button>
+        <button id="btn-stats" onclick="showTab('stats')" class="nav-btn text-slate-300"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2z" stroke-width="2.5"/></svg></button>
+        <button id="btn-cycle" onclick="showTab('cycle')" class="nav-btn text-slate-300"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" stroke-width="2.5"/></svg></button>
     </nav>
 
     <input type="file" id="cameraInput" accept="image/*" capture="camera" class="hidden" onchange="analyzeImage(this.files[0])">
-
 </body>
 </html>
