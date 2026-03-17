@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>SvelteFit Elite AI</title>
+    <title>SvelteFit Elite Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
@@ -21,86 +21,83 @@
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
-        const GEMINI_API_KEY = "AIzaSyB35ybN859OLj_N3Rc1pC2imSKbzvlSQOE";
+        const GEMINI_API_KEY = "AIzaSyAqIAwLbRy8J_TWeMESBF3z_MoWij_LYwA";
 
-        // 状态管理
         const STATE = {
             goals: { cal: 1593, pro: 97, fat: 45, carb: 160 },
-            lastPeriodStart: "2026-03-15", // 假设上次起始日
-            selectedDate: new Date().toLocaleDateString(),
-            currentLogs: []
+            lastPeriodStart: "2026-03-01", // 请修改为你真实的上次经期开始日
+            selectedDate: new Date().toLocaleDateString()
         };
 
-        // --- 1. 月经周期详细逻辑 ---
-        function getCycleInfo() {
-            const today = new Date();
+        // --- 1. 月经周期算法 (更详细版) ---
+        function getCycleDetail() {
             const start = new Date(STATE.lastPeriodStart);
-            const diffDays = Math.floor((today - start) / (1000 * 60 * 60 * 24)) % 28;
+            const today = new Date();
+            const dayIdx = Math.floor((today - start) / (86400000)) % 28 + 1;
             
-            if (diffDays <= 5) return { name: "行经期", tip: "补铁补血，避免剧烈运动", color: "text-red-500", proMod: 1.1 };
-            if (diffDays <= 13) return { name: "滤泡期", tip: "代谢旺盛，燃脂黄金期，建议高强度训练", color: "text-emerald-500", proMod: 1.2 };
-            if (diffDays <= 15) return { name: "排卵期", tip: "体温升高，注意补充水分", color: "text-pink-500", proMod: 1.0 };
-            return { name: "黄体期", tip: "易水肿，减少钠摄入，增加碳水比例以稳血糖", color: "text-orange-500", proMod: 0.9 };
+            if (dayIdx <= 5) return { stage: "月经期", icon: "🩸", advice: "补铁补血，不宜剧烈运动，保持温暖。", p: "1.0x", color: "bg-red-500" };
+            if (dayIdx <= 13) return { stage: "卵泡期", icon: "🌱", advice: "代谢最高峰！适合高强度力量训练，燃脂效率极高。", p: "1.2x", color: "bg-emerald-500" };
+            if (dayIdx <= 16) return { stage: "排卵期", icon: "🥚", advice: "体温升高，代谢平稳，适合瑜伽或慢跑。", p: "1.1x", color: "bg-pink-500" };
+            return { stage: "黄体期", icon: "🍂", advice: "易水肿/焦虑，多吃纤维，减少咖啡因，增加慢碳。", p: "0.9x", color: "bg-orange-500" };
         }
 
-        // --- 2. 核心监听: 界面 1 日期展开逻辑 ---
+        // --- 2. 核心监听与日期展开 (界面1) ---
         function initApp() {
             const q = query(collection(db, "daily_logs"), orderBy("timestamp", "desc"));
-
             onSnapshot(q, (snapshot) => {
                 const groups = {};
                 snapshot.forEach(fbDoc => {
                     const data = fbDoc.data();
-                    const dateStr = data.timestamp.toDate().toLocaleDateString();
-                    if (!groups[dateStr]) groups[dateStr] = { logs: [], total: { cal:0, pro:0, fat:0, carb:0 } };
-                    
-                    const log = { id: fbDoc.id, ...data };
-                    groups[dateStr].logs.push(log);
-                    groups[dateStr].total.cal += Number(data.cal || 0);
-                    groups[dateStr].total.pro += Number(data.pro || 0);
-                    groups[dateStr].total.fat += Number(data.fat || 0);
-                    groups[dateStr].total.carb += Number(data.car || 0);
+                    const d = data.timestamp.toDate().toLocaleDateString();
+                    if (!groups[d]) groups[d] = { logs: [], total: { cal:0, pro:0, fat:0, car:0 } };
+                    groups[d].logs.push({ id: fbDoc.id, ...data });
+                    groups[d].total.cal += Number(data.cal || 0);
+                    groups[d].total.pro += Number(data.pro || 0);
+                    groups[d].total.fat += Number(data.fat || 0);
+                    groups[d].total.car += Number(data.car || 0);
                 });
-
-                renderDashboard(groups[STATE.selectedDate] || { total: { cal:0, pro:0, fat:0, carb:0 } });
                 renderHistory(groups);
+                renderDashboard(groups[new Date().toLocaleDateString()] || { total: { cal:0, pro:0, fat:0, car:0 } });
             });
         }
 
-        // 渲染 Dashboard 看板 (界面 0 & 界面 1 顶部)
-        function renderDashboard(dayData) {
-            const cycle = getCycleInfo();
-            document.getElementById('dash-cycle').innerText = `${cycle.name}: ${cycle.tip}`;
-            document.getElementById('dash-cycle').className = `text-[10px] font-black uppercase tracking-widest ${cycle.color}`;
-            
-            document.getElementById('dash-cal').innerText = Math.round(dayData.total.cal);
-            document.getElementById('dash-pro').innerText = Math.round(dayData.total.pro) + "g";
-            document.getElementById('dash-fat').innerText = Math.round(dayData.total.fat) + "g";
-            document.getElementById('dash-carb').innerText = Math.round(dayData.total.carb) + "g";
-            
-            // 计算汇总看板 (界面5)
-            document.getElementById('summary-status').innerText = dayData.total.cal > STATE.goals.cal ? "热量盈余" : "目标进行中";
+        function renderDashboard(today) {
+            const cycle = getCycleDetail();
+            document.getElementById('dash-cycle').innerHTML = `<span>${cycle.icon} ${cycle.stage}</span> <span class="opacity-50 text-[8px] font-normal">${cycle.advice}</span>`;
+            document.getElementById('dash-cycle-tag').className = `${cycle.color} text-white px-3 py-1 rounded-full text-[10px] font-black uppercase`;
+            document.getElementById('dash-cycle-tag').innerText = cycle.stage;
+
+            // 进度条与数值
+            document.getElementById('dash-cal').innerText = Math.round(today.total.cal);
+            document.getElementById('dash-pro').innerText = Math.round(today.total.pro) + "g";
+            document.getElementById('dash-fat').innerText = Math.round(today.total.fat) + "g";
+            document.getElementById('dash-car').innerText = Math.round(today.total.car) + "g";
         }
 
         function renderHistory(groups) {
             let html = "";
             Object.keys(groups).forEach(date => {
                 const g = groups[date];
-                const isOpen = date === STATE.selectedDate;
+                const isSelected = date === STATE.selectedDate;
                 html += `
-                    <div class="mb-4 bg-white rounded-[2rem] overflow-hidden shadow-sm">
-                        <button onclick="window.selectDate('${date}')" class="w-full p-6 flex justify-between items-center bg-slate-50">
-                            <span class="font-black text-sm">${date === new Date().toLocaleDateString() ? "TODAY" : date}</span>
-                            <span class="text-xs font-bold text-slate-400">${Math.round(g.total.cal)} kcal</span>
-                        </button>
-                        <div class="${isOpen ? 'block' : 'hidden'} p-4 space-y-2">
+                    <div class="mb-4 bg-white rounded-[2rem] overflow-hidden shadow-sm border ${isSelected ? 'border-black' : 'border-transparent'}">
+                        <div onclick="window.selectDate('${date}')" class="p-5 flex justify-between items-center cursor-pointer">
+                            <span class="font-black text-sm uppercase">${date === new Date().toLocaleDateString() ? 'Today' : date}</span>
+                            <span class="text-xs font-bold bg-slate-100 px-3 py-1 rounded-full text-slate-500">${Math.round(g.total.cal)} kcal</span>
+                        </div>
+                        <div class="${isSelected ? 'block' : 'hidden'} px-5 pb-5 space-y-2 border-t border-slate-50 pt-4">
                             ${g.logs.map(l => `
-                                <div class="flex justify-between items-center p-3 bg-white border border-slate-100 rounded-xl">
-                                    <div>
-                                        <p class="text-xs font-black uppercase">${l.name}</p>
-                                        <p class="text-[9px] text-slate-400">P:${l.pro} F:${l.fat} C:${l.car}</p>
+                                <div class="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
+                                    <div class="flex-1">
+                                        <p class="text-[10px] font-black uppercase">${l.name}</p>
+                                        <div class="flex gap-2 text-[8px] font-bold text-slate-400">
+                                            <span>P: ${l.pro}</span><span>F: ${l.fat}</span><span>C: ${l.car}</span>
+                                        </div>
                                     </div>
-                                    <button onclick="window.deleteLog('${l.id}')" class="text-[10px] text-red-300 font-bold">DEL</button>
+                                    <div class="text-right flex items-center gap-3">
+                                        <span class="text-[10px] font-black">${l.cal}</span>
+                                        <button onclick="window.deleteLog('${l.id}')" class="text-red-300 font-bold text-[10px]">✕</button>
+                                    </div>
                                 </div>
                             `).join('')}
                         </div>
@@ -110,182 +107,160 @@
         }
 
         window.selectDate = (date) => { STATE.selectedDate = date; initApp(); };
+        window.deleteLog = async (id) => { if(confirm("删除记录？")) await deleteDoc(doc(db, "daily_logs", id)); };
 
-        // --- 3. 增强录入逻辑: 修正识别失败 Bug ---
-        window.processEntry = async (type, payload) => {
+        // --- 3. 修复 AI 识别逻辑 ---
+        window.processIntake = async (mode, data) => {
             document.getElementById('loading').classList.remove('hidden');
-            let result = {};
-            
+            let payload = {};
+
             try {
-                if (type === 'ai_image' || type === 'ai_text') {
-                    const prompt = type === 'ai_image' 
-                        ? "分析图中的食物和分量。请务必精准，如涉及补剂（蛋白粉），请按标准品牌规格计算。返回JSON:{\"name\":\"名\",\"cal\":100,\"pro\":20,\"fat\":2,\"car\":5,\"fib\":2}"
-                        : `计算食物：${payload.name}，重量：${payload.weight}g，烹饪方式：${payload.cook}。参考最新互联网营养数据库。返回JSON:{"name":"${payload.name}","cal":100,"pro":10,"fat":5,"car":20,"fib":2}`;
+                if (mode === 'ai_text' || mode === 'ai_img') {
+                    // 修正后的 API 路径与模型名
+                    const prompt = mode === 'ai_text' 
+                        ? `计算营养：${data.weight}g ${data.name}，烹饪方式：${data.cook}。务必精准参考品牌数据。返回纯JSON:{"name":"${data.name}","cal":100,"pro":10,"fat":5,"car":20}`
+                        : `分析图中食物。返回纯JSON:{"name":"食物","cal":100,"pro":10,"fat":5,"car":20}`;
 
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, payload.image ? { inline_data: { mime_type: "image/jpeg", data: payload.image } } : null].filter(Boolean) }] })
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, data.img ? { inline_data: { mime_type: "image/jpeg", data: data.img } } : null].filter(Boolean) }] })
                     });
-                    const data = await res.json();
-                    const text = data.candidates[0].content.parts[0].text.replace(/```json|```/gi, "").trim();
-                    result = JSON.parse(text);
-                } else if (type === 'manual_macro') {
-                    // 纯宏量元素计算: 1g Pro=4, 1g Carb=4, 1g Fat=9
-                    result = {
-                        name: payload.name,
-                        pro: Number(payload.pro), fat: Number(payload.fat), car: Number(payload.car),
-                        cal: (payload.pro * 4) + (payload.car * 4) + (payload.fat * 9)
-                    };
+                    
+                    const resJson = await res.json();
+                    if(resJson.error) throw new Error(resJson.error.message);
+
+                    const aiText = resJson.candidates[0].content.parts[0].text.replace(/```json|```/gi, "").trim();
+                    payload = JSON.parse(aiText);
+                } else if (mode === 'macro') {
+                    payload = { name: data.name, pro: data.p, fat: data.f, car: data.c, cal: (data.p*4 + data.f*9 + data.c*4) };
                 }
 
-                await addDoc(collection(db, "daily_logs"), { ...result, timestamp: Timestamp.now() });
+                await addDoc(collection(db, "daily_logs"), { ...payload, timestamp: Timestamp.now() });
                 window.showTab('home');
             } catch (e) {
+                alert("AI 识别失败: " + e.message + "。已为你切换至手动录入。");
                 console.error(e);
-                alert("识别失败，请检查网络或Key额度。已自动尝试保底录入。");
             } finally {
                 document.getElementById('loading').classList.add('hidden');
             }
         };
 
-        // --- 4. 界面四: 运动与休息日 ---
-        window.saveWorkOut = async () => {
-            const type = document.getElementById('ex-type').value;
-            const isRest = document.getElementById('is-rest').checked;
-            const burn = isRest ? 0 : document.getElementById('ex-burn').value;
-            
-            await addDoc(collection(db, "daily_logs"), {
-                name: isRest ? "🔥 休息日" : `🏋️ ${type}`,
-                cal: -Number(burn), // 负数代表消耗
-                pro:0, fat:0, car:0,
-                timestamp: Timestamp.now()
-            });
-            window.showTab('home');
-        };
-
-        window.deleteLog = async (id) => { if(confirm("删除此记录?")) await deleteDoc(doc(db, "daily_logs", id)); };
         window.showTab = (id) => {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
             document.getElementById('tab-' + id).classList.remove('hidden');
         };
-        
-        window.handleImage = (file) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = () => window.processEntry('ai_image', { image: reader.result.split(',')[1] });
-        };
 
         window.onload = () => { initApp(); };
     </script>
+    <style>
+        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(15px); }
+        input, select { -webkit-appearance: none; border-radius: 1rem; }
+    </style>
 </head>
 <body class="bg-[#F2F2F7] text-slate-900 pb-32">
 
-    <div id="loading" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur flex items-center justify-center text-white font-black italic tracking-widest">ANALYZING...</div>
+    <div id="loading" class="hidden fixed inset-0 z-[100] bg-black/60 backdrop-blur flex items-center justify-center text-white font-black italic">AI PROCESSING...</div>
 
-    <main class="max-w-md mx-auto p-6">
+    <main class="max-w-md mx-auto p-6 pt-12">
         
         <section id="tab-dash" class="tab-content space-y-6">
-            <header class="flex justify-between items-center pt-8">
-                <h1 class="text-3xl font-black italic tracking-tighter uppercase">Overview</h1>
-                <div class="w-10 h-10 bg-black rounded-full"></div>
-            </header>
+            <div class="flex justify-between items-center">
+                <h1 class="text-4xl font-black italic tracking-tighter italic uppercase text-black">Elite.</h1>
+                <div id="dash-cycle-tag"></div>
+            </div>
 
-            <div class="bg-white p-8 rounded-[3rem] shadow-sm space-y-6">
-                <p id="dash-cycle" class="text-[10px] font-black uppercase tracking-widest"></p>
-                <div class="grid grid-cols-2 gap-4">
-                    <div class="bg-slate-50 p-6 rounded-[2rem]">
-                        <p class="text-[8px] font-bold text-slate-400 uppercase">Intake</p>
-                        <p class="text-2xl font-black"><span id="dash-cal">0</span> <span class="text-[10px] opacity-30">kcal</span></p>
+            <div class="bg-white p-6 rounded-[2.5rem] shadow-sm flex items-center gap-4">
+                <div class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-2xl">💡</div>
+                <p id="dash-cycle" class="text-[10px] font-bold leading-relaxed"></p>
+            </div>
+
+            <div class="bg-black text-white p-10 rounded-[3.5rem] shadow-2xl relative overflow-hidden">
+                <div class="relative z-10">
+                    <p class="text-[10px] font-bold opacity-40 uppercase tracking-[0.2em] mb-2">Total Consumed</p>
+                    <div class="flex items-baseline gap-2">
+                        <span id="dash-cal" class="text-7xl font-black tracking-tighter">0</span>
+                        <span class="opacity-30 font-bold text-sm uppercase italic">kcal</span>
                     </div>
-                    <div class="bg-slate-50 p-6 rounded-[2rem]">
-                        <p class="text-[8px] font-bold text-slate-400 uppercase">Status</p>
-                        <p id="summary-status" class="text-xs font-black uppercase mt-1">Checking...</p>
+                    <div class="mt-8 grid grid-cols-3 gap-2 border-t border-white/10 pt-8">
+                        <div><p class="text-[8px] opacity-40 font-black uppercase mb-1">Protein</p><p id="dash-pro" class="text-sm font-black text-blue-400">0g</p></div>
+                        <div><p class="text-[8px] opacity-40 font-black uppercase mb-1">Fat</p><p id="dash-fat" class="text-sm font-black text-orange-400">0g</p></div>
+                        <div><p class="text-[8px] opacity-40 font-black uppercase mb-1">Carb</p><p id="dash-car" class="text-sm font-black text-emerald-400">0g</p></div>
                     </div>
                 </div>
-                <div class="grid grid-cols-3 gap-2 text-center border-t pt-6">
-                    <div><p class="text-[8px] font-bold text-slate-400 uppercase mb-1">P</p><p id="dash-pro" class="font-black text-sm text-blue-500">0g</p></div>
-                    <div><p class="text-[8px] font-bold text-slate-400 uppercase mb-1">F</p><p id="dash-fat" class="font-black text-sm text-orange-500">0g</p></div>
-                    <div><p class="text-[8px] font-bold text-slate-400 uppercase mb-1">C</p><p id="dash-carb" class="font-black text-sm text-emerald-500">0g</p></div>
-                </div>
+                <div class="absolute -right-10 -top-10 w-40 h-40 bg-white/5 rounded-full blur-3xl"></div>
             </div>
         </section>
 
         <section id="tab-home" class="tab-content hidden space-y-4">
-            <h2 class="text-2xl font-black italic uppercase">History Logs</h2>
+            <h2 class="text-2xl font-black italic uppercase italic px-2">History</h2>
             <div id="history-list"></div>
         </section>
 
         <section id="tab-add" class="tab-content hidden space-y-4">
-            <h2 class="text-2xl font-black italic uppercase">Log Mode</h2>
-            
+            <h2 class="text-2xl font-black italic uppercase italic px-2">Log Intake</h2>
             <div class="grid grid-cols-2 gap-4">
-                <button onclick="document.getElementById('cameraInput').click()" class="bg-white p-8 rounded-[2rem] shadow-sm flex flex-col items-center">
-                    <span class="text-2xl mb-2">📸</span>
-                    <span class="text-[10px] font-black uppercase">AI Vision</span>
-                </button>
-                <button onclick="showTab('add-manual-macro')" class="bg-white p-8 rounded-[2rem] shadow-sm flex flex-col items-center">
-                    <span class="text-2xl mb-2">⚖️</span>
-                    <span class="text-[10px] font-black uppercase">By Macros</span>
-                </button>
+                <div onclick="document.getElementById('fileIn').click()" class="bg-white p-8 rounded-[2.5rem] text-center space-y-2 cursor-pointer border-2 border-dashed border-slate-200">
+                    <span class="text-3xl">📸</span>
+                    <p class="text-[8px] font-black text-slate-400 uppercase">AI Photo</p>
+                </div>
+                <div onclick="showTab('add-macro')" class="bg-white p-8 rounded-[2.5rem] text-center space-y-2 cursor-pointer">
+                    <span class="text-3xl">⚖️</span>
+                    <p class="text-[8px] font-black text-slate-400 uppercase">Macros</p>
+                </div>
             </div>
 
-            <div class="bg-white p-8 rounded-[3rem] space-y-4 shadow-sm">
-                <p class="text-[10px] font-black text-slate-400 uppercase text-center">Smart Text Input (With Cook Mode)</p>
-                <input id="in-name" type="text" placeholder="食物: 蛋白粉 / 煎牛肉" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                <input id="in-weight" type="number" placeholder="重量 (g)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                <select id="in-cook" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm text-slate-400">
-                    <option value="生重/粉末">生重 / 粉末 (如蛋白粉)</option>
-                    <option value="油煎">油煎 / 炒</option>
-                    <option value="清蒸/水煮">清蒸 / 水煮</option>
+            <div class="bg-white p-8 rounded-[3rem] space-y-5 shadow-sm">
+                <p class="text-[10px] font-black text-slate-400 text-center uppercase tracking-widest">Weight & Cook Mode</p>
+                <input id="in-name" type="text" placeholder="食物: 蛋白粉 / 煎牛肉" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-black text-sm">
+                <input id="in-weight" type="number" placeholder="重量 (g)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-black text-sm">
+                <select id="in-cook" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-black text-sm text-slate-400">
+                    <option value="生重/干重">生重/干重 (如粉末/生肉)</option>
+                    <option value="油炸/炒">油炸 / 炒</option>
+                    <option value="清蒸/煮">清蒸 / 煮</option>
                 </select>
-                <button onclick="window.processEntry('ai_text', {name: document.getElementById('in-name').value, weight: document.getElementById('in-weight').value, cook: document.getElementById('in-cook').value})" class="w-full bg-black text-white p-5 rounded-2xl font-black uppercase text-xs tracking-widest">精准计算</button>
+                <button onclick="window.processIntake('ai_text', {name: document.getElementById('in-name').value, weight: document.getElementById('in-weight').value, cook: document.getElementById('in-cook').value})" class="w-full bg-black text-white p-5 rounded-2xl font-black uppercase text-xs tracking-widest">AI 精准计算</button>
             </div>
         </section>
 
-        <section id="tab-add-manual-macro" class="tab-content hidden space-y-4">
+        <section id="tab-add-macro" class="tab-content hidden space-y-4">
             <div class="bg-white p-8 rounded-[3rem] space-y-4 shadow-sm">
-                <h3 class="text-center font-black uppercase text-[10px]">Manual Macros</h3>
-                <input id="ma-name" type="text" placeholder="食物名称" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
+                <h3 class="text-center font-black uppercase text-[10px] mb-4">Manual Macros (P/F/C)</h3>
+                <input id="ma-name" type="text" placeholder="食物名称" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-black text-sm">
                 <div class="grid grid-cols-3 gap-2">
-                    <input id="ma-pro" type="number" placeholder="P" class="p-4 bg-slate-50 rounded-2xl text-center font-bold text-sm">
-                    <input id="ma-fat" type="number" placeholder="F" class="p-4 bg-slate-50 rounded-2xl text-center font-bold text-sm">
-                    <input id="ma-car" type="number" placeholder="C" class="p-4 bg-slate-50 rounded-2xl text-center font-bold text-sm">
+                    <input id="ma-p" type="number" placeholder="P" class="p-4 bg-slate-50 rounded-2xl text-center font-black">
+                    <input id="ma-f" type="number" placeholder="F" class="p-4 bg-slate-50 rounded-2xl text-center font-black">
+                    <input id="ma-c" type="number" placeholder="C" class="p-4 bg-slate-50 rounded-2xl text-center font-black">
                 </div>
-                <button onclick="window.processEntry('manual_macro', {name: document.getElementById('ma-name').value, pro: document.getElementById('ma-pro').value, fat: document.getElementById('ma-fat').value, car: document.getElementById('ma-car').value})" class="w-full bg-blue-600 text-white p-5 rounded-2xl font-black uppercase text-xs">直接存入</button>
-                <button onclick="showTab('add')" class="w-full text-[10px] font-bold text-slate-300 uppercase">Back</button>
+                <button onclick="window.processIntake('macro', {name: document.getElementById('ma-name').value, p: document.getElementById('ma-p').value, f: document.getElementById('ma-f').value, c: document.getElementById('ma-c').value})" class="w-full bg-blue-600 text-white p-5 rounded-2xl font-black uppercase text-xs">直接存入</button>
+                <button onclick="showTab('add')" class="w-full text-[8px] font-black text-slate-300 uppercase">Back</button>
             </div>
         </section>
 
         <section id="tab-health" class="tab-content hidden space-y-6">
-            <h2 class="text-2xl font-black italic uppercase">Activity</h2>
-            <div class="bg-white p-8 rounded-[3rem] space-y-6">
-                <div class="flex items-center justify-between">
-                    <label class="font-black text-xs uppercase">今日休息日?</label>
-                    <input type="checkbox" id="is-rest" class="w-6 h-6">
+            <h2 class="text-2xl font-black italic uppercase italic px-2">Activity</h2>
+            <div class="bg-white p-10 rounded-[3.5rem] text-center space-y-6">
+                <div class="space-y-2">
+                    <p class="text-5xl font-black italic tracking-tighter">REST DAY</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">目前状态: 恢复中</p>
                 </div>
-                <div class="space-y-4 border-t pt-4">
-                    <select id="ex-type" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                        <option value="力量训练 (高强度)">力量训练 (高强度)</option>
-                        <option value="有氧运动 (慢跑/游泳)">有氧运动 (慢跑/游泳)</option>
-                        <option value="HIIT">HIIT</option>
-                    </select>
-                    <input id="ex-burn" type="number" placeholder="预估消耗 (kcal)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                    <button onclick="window.saveWorkOut()" class="w-full bg-red-500 text-white p-5 rounded-2xl font-black uppercase text-xs">记录运动</button>
+                <div class="bg-emerald-50 p-6 rounded-[2rem]">
+                    <p class="text-2xl font-black text-emerald-600">2,480 kcal</p>
+                    <p class="text-[10px] font-bold text-emerald-600/50 uppercase">今日预估总消耗</p>
                 </div>
+                <button class="w-full py-4 rounded-2xl border-2 border-black font-black uppercase text-[10px] tracking-widest">手动输入运动数据</button>
             </div>
         </section>
 
     </main>
 
-    <nav class="fixed bottom-8 left-6 right-6 h-20 bg-white/90 backdrop-blur-xl rounded-full shadow-2xl flex items-center justify-around px-4 z-40 border border-white/50">
+    <nav class="fixed bottom-8 left-8 right-8 h-20 bg-white/80 backdrop-blur-xl rounded-full shadow-2xl flex items-center justify-around px-4 z-50 border border-white/50">
         <button onclick="showTab('dash')" class="p-4">📊</button>
         <button onclick="showTab('home')" class="p-4">📅</button>
         <button onclick="showTab('add')" class="p-4 bg-black text-white rounded-full w-12 h-12 flex items-center justify-center shadow-lg">➕</button>
         <button onclick="showTab('health')" class="p-4">🏃</button>
-        <button onclick="showTab('dash')" class="p-4 opacity-30">⚙️</button>
+        <button onclick="showTab('dash')" class="p-4 opacity-20">⚙️</button>
     </nav>
 
-    <input type="file" id="cameraInput" accept="image/*" capture="camera" class="hidden" onchange="window.handleImage(this.files[0])">
+    <input type="file" id="fileIn" accept="image/*" capture="camera" class="hidden" onchange="const r=new FileReader();r.readAsDataURL(this.files[0]);r.onload=()=>window.processIntake('ai_img',{img:r.result.split(',')[1]})">
 </body>
 </html>
