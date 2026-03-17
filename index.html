@@ -6,11 +6,9 @@
     <title>SvelteFit AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
-        // 1. 使用你提供的最新 v12.10.0 CDN 路径
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
-        import { getFirestore, collection, addDoc, query, onSnapshot, where, Timestamp, orderBy } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, query, onSnapshot, where, Timestamp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
 
-        // 2. 你的 Firebase 配置
         const firebaseConfig = {
             apiKey: "AIzaSyD5JAln13HRfqCo-SvWxrS0wCv6b1bKYG8",
             authDomain: "fitnessjz.firebaseapp.com",
@@ -23,86 +21,76 @@
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
-
-        // 3. 你的 Gemini API Key
         const GEMINI_API_KEY = "AIzaSyAqIAwLbRy8J_TWeMESBF3z_MoWij_LYwA";
 
-        const GOALS = {
-            targetCal: 1593, targetPro: 97, targetCarb: 160, targetFiber: 25,
-            lastPeriods: ["2026-01-18", "2026-02-15", "2026-03-15"]
-        };
+        const GOALS = { targetCal: 1593, targetPro: 97, targetCarb: 160, targetFiber: 25 };
 
-        // --- 数据监听：实时更新首页 ---
-        function initRealtimeDashboard() {
+        // --- 修复点：移除 orderBy，确保空数据库也能读取 ---
+        function initDashboard() {
             const startOfToday = new Date();
             startOfToday.setHours(0,0,0,0);
 
-            // 监听今日数据
             const q = query(
                 collection(db, "daily_logs"), 
-                where("timestamp", ">=", Timestamp.fromDate(startOfToday)),
-                orderBy("timestamp", "desc")
+                where("timestamp", ">=", Timestamp.fromDate(startOfToday))
             );
 
             onSnapshot(q, (snapshot) => {
-                let totalCal = 0, totalPro = 0, totalCarb = 0, totalFib = 0;
+                let totalCal = 0;
                 let listHtml = "";
                 
                 snapshot.forEach((doc) => {
                     const data = doc.data();
                     totalCal += Number(data.cal || 0);
-                    totalPro += Number(data.pro || 0);
-                    totalCarb += Number(data.car || 0);
-                    totalFib += Number(data.fib || 0);
-                    
                     listHtml += `
                         <div class="flex justify-between items-center p-4 bg-slate-50 rounded-2xl mb-2">
-                            <div>
-                                <p class="font-bold text-sm">${data.name}</p>
-                                <p class="text-[10px] text-slate-400">${new Date(data.timestamp.toDate()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
-                            </div>
+                            <span class="font-bold text-sm">${data.name}</span>
                             <span class="font-black text-sm">${data.cal} kcal</span>
                         </div>`;
                 });
 
                 document.getElementById('main-cal').innerText = Math.max(0, GOALS.targetCal - totalCal);
                 document.getElementById('food-list').innerHTML = listHtml || "<p class='text-slate-300 text-xs text-center py-10'>尚未记录今日饮食</p>";
-                
-                // 营养素更新
-                document.getElementById('pro-val').innerText = `${Math.round(totalPro)}/${GOALS.targetPro}g`;
-                document.getElementById('car-val').innerText = `${Math.round(totalCarb)}/${GOALS.targetCarb}g`;
-                document.getElementById('fib-val').innerText = `${Math.round(totalFib)}/${GOALS.targetFiber}g`;
             });
         }
 
-        // --- 保存逻辑 (AI 计算) ---
+        // --- 这就是你要找的 saveIntake 逻辑 ---
         window.saveIntake = async (name, weight, isImage = false, base64 = null) => {
-            document.body.style.opacity = "0.5"; // 加载中视觉反馈
+            document.body.style.opacity = "0.5";
             
+            // 构造 AI 提示词：要求它根据克数计算
             let prompt = isImage 
-                ? "分析图中食物，给出热量(kcal),蛋白质(g),碳水(g),纤维(g)。只返回JSON:{\"name\":\"名\",\"cal\":100,\"pro\":10,\"car\":10,\"fib\":2}"
-                : `计算食物：${name}，重量：${weight}克。给出热量(kcal),蛋白质(g),碳水(g),纤维(g)。只返回JSON:{"name":"${name}","cal":123,"pro":10,"car":20,"fib":5}`;
+                ? "分析图中食物，给出热量(kcal)。只返回JSON:{\"name\":\"名\",\"cal\":100,\"pro\":10,\"car\":10,\"fib\":2}"
+                : `计算食物：${name}，重量：${weight}克。给出热量(kcal)。只返回JSON:{"name":"${name}","cal":123,"pro":10,"car":20,"fib":5}`;
 
             try {
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
                     method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         contents: [{ parts: [{ text: prompt }, isImage ? { inline_data: { mime_type: "image/jpeg", data: base64 } } : null].filter(Boolean) }]
                     })
                 });
-                const data = await res.json();
-                const result = JSON.parse(data.candidates[0].content.parts[0].text.replace(/```json|```/g, ""));
                 
-                await addDoc(collection(db, "daily_logs"), { ...result, timestamp: Timestamp.now() });
+                const data = await res.json();
+                const resultText = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
+                const result = JSON.parse(resultText);
+                
+                // 存入 Firebase
+                await addDoc(collection(db, "daily_logs"), { 
+                    ...result, 
+                    timestamp: Timestamp.now() 
+                });
+                
                 window.showTab('home');
             } catch (e) {
-                alert("AI 计算或数据库保存失败，请检查 Firebase 规则。");
+                console.error(e);
+                alert("AI识别或数据库保存失败。请检查：1.Firebase Rules是否Publish 2.网络环境");
             } finally {
                 document.body.style.opacity = "1";
             }
         };
 
-        // 挂载全局函数
         window.showTab = (id) => {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
             document.getElementById('tab-' + id).classList.remove('hidden');
@@ -115,79 +103,37 @@
             window.saveIntake(name, weight);
         };
 
-        window.handleImage = (file) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = () => window.saveIntake(null, null, true, reader.result.split(',')[1]);
-        };
-
-        window.onload = () => {
-            initRealtimeDashboard();
-            const lastStart = new Date(GOALS.lastPeriods[2]);
-            const diff = Math.floor((new Date() - lastStart) / 86400000);
-            document.getElementById('phase-text').innerText = diff <= 5 ? "行经期 - 注意补铁" : diff <= 13 ? "滤泡期 - 适合燃脂" : "黄体期 - 预防浮肿";
-        };
+        window.onload = () => { initDashboard(); };
     </script>
-    <style>
-        body { font-family: 'Inter', system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
-        .tab-content { animation: slideUp 0.4s ease-out; }
-        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-    </style>
 </head>
 <body class="bg-[#F2F2F7] text-black">
-
-    <div class="max-w-md mx-auto min-h-screen relative pb-32">
-        <header class="p-8 pt-16 flex justify-between items-end">
-            <div>
-                <h1 class="text-3xl font-black italic tracking-tighter uppercase">Status</h1>
-                <p id="phase-text" class="text-[10px] font-bold text-blue-600 uppercase mt-1 tracking-widest"></p>
-            </div>
-            <div class="w-10 h-10 bg-white rounded-full shadow-sm border border-slate-100 flex items-center justify-center text-sm">🥗</div>
-        </header>
-
-        <section id="tab-home" class="tab-content px-6 space-y-6">
-            <div class="bg-white p-8 rounded-[3rem] shadow-sm border border-white">
+    <main class="max-w-md mx-auto p-6 pt-16 pb-32">
+        <section id="tab-home" class="tab-content space-y-6">
+            <div class="bg-white p-8 rounded-[3rem] shadow-sm">
                 <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">今日剩余热量</p>
                 <div class="flex items-baseline gap-1 mt-1">
                     <span id="main-cal" class="text-7xl font-black tracking-tighter">1593</span>
                     <span class="text-slate-300 font-bold text-xs uppercase">kcal</span>
                 </div>
-                <div class="mt-8 grid grid-cols-3 gap-2 border-t pt-6 border-slate-50">
-                    <div class="text-center"><p class="text-[8px] text-slate-400 font-bold uppercase mb-1">蛋白质</p><p id="pro-val" class="font-black text-blue-600 text-xs">0/97g</p></div>
-                    <div class="text-center"><p class="text-[8px] text-slate-400 font-bold uppercase mb-1">碳水</p><p id="car-val" class="font-black text-emerald-600 text-xs">0/160g</p></div>
-                    <div class="text-center"><p class="text-[8px] text-slate-400 font-bold uppercase mb-1">纤维</p><p id="fib-val" class="font-black text-orange-600 text-xs">0/25g</p></div>
-                </div>
             </div>
-
             <div class="bg-white p-6 rounded-[2.5rem] shadow-sm">
-                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">今日记录清单</p>
+                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">今日摄入明细</p>
                 <div id="food-list" class="space-y-1"></div>
             </div>
         </section>
 
-        <section id="tab-add" class="tab-content hidden px-6 space-y-4">
-            <h2 class="text-2xl font-black italic px-2 uppercase">Log Intake</h2>
-            <button onclick="document.getElementById('cameraInput').click()" class="w-full bg-white p-12 rounded-[2.5rem] border-2 border-dashed border-slate-200 flex flex-col items-center hover:bg-slate-50 transition-colors">
-                <span class="text-4xl mb-2">📸</span>
-                <p class="font-bold text-slate-400 text-[10px] uppercase tracking-widest">AI 拍照自动识别</p>
-            </button>
-            
-            <div class="bg-white p-8 rounded-[2.5rem] space-y-5 shadow-sm">
-                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">或者手动录入克数</p>
-                <input id="m-name" type="text" placeholder="食物名称 (如: 牛排)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                <input id="m-weight" type="number" placeholder="重量 (克)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm">
-                <button onclick="handleManual()" class="w-full bg-black text-white p-5 rounded-2xl font-black uppercase text-xs tracking-[0.2em] active:scale-95 transition-transform">AI 计算并保存</button>
+        <section id="tab-add" class="tab-content hidden space-y-4">
+            <div class="bg-white p-8 rounded-[2.5rem] space-y-5">
+                <input id="m-name" type="text" placeholder="食物名称 (如: 苹果)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold">
+                <input id="m-weight" type="number" placeholder="重量 (克)" class="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold">
+                <button onclick="handleManual()" class="w-full bg-black text-white p-5 rounded-2xl font-black uppercase tracking-widest">计算并保存</button>
             </div>
         </section>
 
-        <nav class="fixed bottom-10 left-8 right-8 h-18 bg-white/90 backdrop-blur-xl rounded-full shadow-2xl flex items-center justify-around px-2 border border-white/50">
-            <button onclick="showTab('home')" class="p-4 text-black"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16m-7 6h7" stroke-width="2.5" stroke-linecap="round"/></svg></button>
-            <button onclick="showTab('add')" class="p-4 text-slate-300"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" stroke-width="2.5" stroke-linecap="round"/></svg></button>
-            <button onclick="showTab('home')" class="p-4 text-slate-300"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2z" stroke-width="2.5"/></svg></button>
-            <button onclick="showTab('home')" class="p-4 text-slate-300"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" stroke-width="2.5"/></svg></button>
+        <nav class="fixed bottom-10 left-8 right-8 h-18 bg-white rounded-full shadow-2xl flex items-center justify-around">
+            <button onclick="showTab('home')" class="p-4 text-black">🏠</button>
+            <button onclick="showTab('add')" class="p-4 text-slate-300">➕</button>
         </nav>
-    </div>
-
-    <input type="file" id="cameraInput" accept="image/*" capture="camera" class="hidden" onchange="handleImage(this.files[0])">
+    </main>
 </body>
 </html>
